@@ -13,14 +13,18 @@ def clean_column_name(name: str) -> str:
     return value or "column"
 
 
-def standardize_columns(df: pl.DataFrame) -> pl.DataFrame:
+def standardize_mapping(columns: list[str]) -> dict[str, str]:
     used: dict[str, int] = {}
     mapping: dict[str, str] = {}
-    for old in df.columns:
+    for old in columns:
         base = clean_column_name(old)
         used[base] = used.get(base, 0) + 1
         mapping[old] = base if used[base] == 1 else f"{base}_{used[base]}"
-    return df.rename(mapping)
+    return mapping
+
+
+def standardize_columns(df: pl.DataFrame) -> pl.DataFrame:
+    return df.rename(standardize_mapping(df.columns))
 
 
 def trim_string_columns(df: pl.DataFrame) -> pl.DataFrame:
@@ -95,40 +99,60 @@ def provider_type_expr(source_column: str, output_column: str = "provider_type")
 
 def apply_transform(df: pl.DataFrame, config: Dict[str, Any]) -> pl.DataFrame:
     out = df.clone()
+    column_map = {column: column for column in out.columns}
 
     if config.get("standardize_columns"):
-        out = standardize_columns(out)
+        column_map = standardize_mapping(out.columns)
+        out = out.rename(column_map)
+
+    def resolve(column: str | None) -> str | None:
+        if not column:
+            return column
+        return column_map.get(column, column)
 
     if config.get("trim_strings"):
         out = trim_string_columns(out)
 
-    rename_map = {
-        old: new.strip()
-        for old, new in (config.get("rename_map") or {}).items()
-        if old in out.columns and isinstance(new, str) and new.strip()
-    }
+    rename_map: dict[str, str] = {}
+    for old, new in (config.get("rename_map") or {}).items():
+        current = resolve(old)
+        if current in out.columns and isinstance(new, str) and new.strip():
+            rename_map[current] = new.strip()
     if rename_map:
         out = out.rename(rename_map)
 
-    drop_columns = [c for c in (config.get("drop_columns") or []) if c in out.columns]
+    def resolve_after_rename(column: str | None) -> str | None:
+        current = resolve(column)
+        return rename_map.get(current, current)
+
+    drop_columns = [
+        resolve_after_rename(c)
+        for c in (config.get("drop_columns") or [])
+        if resolve_after_rename(c) in out.columns
+    ]
     if drop_columns:
         out = out.drop(drop_columns)
 
-    for column in config.get("titlecase_columns") or []:
+    for original in config.get("titlecase_columns") or []:
+        column = resolve_after_rename(original)
         if column in out.columns:
             out = out.with_columns(
                 pl.col(column).cast(pl.String, strict=False).str.to_titlecase().alias(column)
             )
 
-    phone_column = config.get("phone_column")
+    phone_column = resolve_after_rename(config.get("phone_column"))
     if phone_column and phone_column in out.columns:
         out = out.with_columns(normalize_phone_expr(phone_column))
 
-    provider_source = config.get("provider_type_source")
+    provider_source = resolve_after_rename(config.get("provider_type_source"))
     if provider_source and provider_source in out.columns:
         out = out.with_columns(provider_type_expr(provider_source))
 
-    dedupe_columns = [c for c in (config.get("dedupe_columns") or []) if c in out.columns]
+    dedupe_columns = [
+        resolve_after_rename(c)
+        for c in (config.get("dedupe_columns") or [])
+        if resolve_after_rename(c) in out.columns
+    ]
     if dedupe_columns:
         out = out.unique(subset=dedupe_columns, keep="first", maintain_order=True)
 
