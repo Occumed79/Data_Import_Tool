@@ -16,6 +16,7 @@ from src.database import (
 )
 from src.exports import to_csv_bytes, to_excel_bytes, to_json_bytes, to_parquet_bytes
 from src.intake import load_bytes, load_url
+from src.quality import diff_frames, merge_frames, quarantine_required
 from src.transform import apply_transform, profile_frame
 
 
@@ -210,10 +211,89 @@ with tab_clean:
         frame_metrics(current_df)
         st.dataframe(current_df.head(100).to_pandas(), use_container_width=True, hide_index=True)
 
+        st.markdown("#### Required-field validation / quarantine")
+        required_columns = st.multiselect(
+            "Fields that may not be blank",
+            current_df.columns,
+            key=f"required_fields_{name}",
+        )
+        if st.button("Validate and quarantine bad rows", disabled=not required_columns):
+            try:
+                clean_rows, bad_rows = quarantine_required(current_df, required_columns)
+                st.session_state.working[name] = clean_rows
+                if bad_rows.height:
+                    quarantine_name = f"{name}__quarantine"
+                    register_frames({quarantine_name: bad_rows})
+                    st.warning(
+                        f"Quarantined {bad_rows.height:,} row(s) into {quarantine_name}. "
+                        f"{clean_rows.height:,} valid row(s) remain in {name}."
+                    )
+                else:
+                    st.success("No rows failed the required-field rules.")
+            except Exception as exc:
+                st.error(str(exc))
+
         if st.button("Reset dataset"):
             st.session_state.working[name] = source_df
             st.session_state.configs[name] = {}
             st.rerun()
+
+
+with tab_merge:
+    st.subheader("Merge & compare datasets")
+    names = list(st.session_state.working.keys())
+
+    if len(names) < 2:
+        st.info("Load at least two datasets to merge or compare them.")
+    else:
+        st.markdown("#### Join two sources")
+        j1, j2, j3 = st.columns([1, 1, 0.7])
+        left_name = j1.selectbox("Left dataset", names, key="merge_left")
+        right_options = [n for n in names if n != left_name]
+        right_name = j2.selectbox("Right dataset", right_options, key="merge_right")
+        join_mode = j3.selectbox("Join type", ["left", "inner", "full"], key="merge_mode")
+
+        left_df = st.session_state.working[left_name]
+        right_df = st.session_state.working[right_name]
+        common_columns = [c for c in left_df.columns if c in right_df.columns]
+        join_keys = st.multiselect("Join key(s)", common_columns, key="merge_keys")
+
+        if st.button("Create merged dataset", type="primary", disabled=not join_keys):
+            try:
+                merged = merge_frames(left_df, right_df, join_keys, join_mode)
+                merged_name = f"{left_name}__merged__{right_name}"
+                register_frames({merged_name: merged})
+                st.success(f"Created {merged_name} with {merged.height:,} row(s).")
+            except Exception as exc:
+                st.error(str(exc))
+
+        st.markdown("#### Compare two versions")
+        d1, d2 = st.columns(2)
+        previous_name = d1.selectbox("Previous version", names, key="diff_previous")
+        current_options = [n for n in names if n != previous_name]
+        current_name = d2.selectbox("Current version", current_options, key="diff_current")
+
+        previous_df = st.session_state.working[previous_name]
+        current_df = st.session_state.working[current_name]
+        diff_common = [c for c in previous_df.columns if c in current_df.columns]
+        diff_keys = st.multiselect("Comparison key(s)", diff_common, key="diff_keys")
+
+        if st.button("Build change report", disabled=not diff_keys):
+            try:
+                diff = diff_frames(previous_df, current_df, diff_keys)
+                diff_name = f"{previous_name}__vs__{current_name}"
+                register_frames({diff_name: diff})
+                counts = (
+                    diff.group_by("__change_status")
+                    .len()
+                    .sort("__change_status")
+                    .to_dicts()
+                )
+                st.success(f"Created {diff_name}.")
+                st.dataframe(counts, use_container_width=True, hide_index=True)
+                st.dataframe(diff.head(200).to_pandas(), use_container_width=True, hide_index=True)
+            except Exception as exc:
+                st.error(str(exc))
 
 
 with tab_sql:
