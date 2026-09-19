@@ -72,8 +72,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab_import, tab_clean, tab_sql, tab_export, tab_recipes = st.tabs(
-    ["Import", "Clean & Transform", "SQL Workbench", "Export & Neon", "Recipes & History"]
+tab_import, tab_clean, tab_merge, tab_sql, tab_export, tab_recipes = st.tabs(
+    ["Import", "Clean & Transform", "Merge & Compare", "SQL Workbench", "Export & Neon", "Recipes & History"]
 )
 
 
