@@ -1,0 +1,11 @@
+streamlit>=1.49,<2
+polars>=1.33,<2
+duckdb>=1.4,<2
+pandas>=2.3,<3
+pyarrow>=21,<22
+openpyxl>=3.1,<4
+xlsxwriter>=3.2,<4
+requests>=2.32,<3
+SQLAlchemy>=2.0,<3
+psycopg[binary]>=3.2,<4
+pytest>=8.4,<9
