@@ -9,7 +9,7 @@ def test_standardize_columns_dedupes_names():
     assert out.columns == ["clinic_name", "clinic_name_2"]
 
 
-def test_transform_trim_phone_and_dedupe():
+def test_transform_resolves_original_names_after_standardization():
     df = pl.DataFrame({
         "Name": [" Alpha Clinic ", " Alpha Clinic "],
         "Phone": ["5594352800", "5594352800"],
@@ -17,8 +17,8 @@ def test_transform_trim_phone_and_dedupe():
     out = apply_transform(df, {
         "standardize_columns": True,
         "trim_strings": True,
-        "phone_column": "phone",
-        "dedupe_columns": ["name", "phone"],
+        "phone_column": "Phone",
+        "dedupe_columns": ["Name", "Phone"],
         "remove_blank_rows": True,
     })
     assert out.height == 1
