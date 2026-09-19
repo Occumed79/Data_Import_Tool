@@ -19,6 +19,9 @@ The tool is deliberately separate from the Network Map, Vaccine Prescription Gen
 - Optional provider-type classification
 - De-duplicate on selected keys
 - Remove fully blank rows
+- Required-field validation with failed-row quarantine
+- Join two imported sources on one or more keys
+- Compare two dataset versions and label Added / Removed / Changed / Unchanged rows
 - Save reusable transformation recipes
 - Run read-only DuckDB SQL against the current dataset
 - Export clean data to CSV, JSON, Parquet, or XLSX
@@ -86,8 +89,7 @@ The code is modular so the next additions can include:
 - Census/geocoding adapters
 - richer address normalization
 - exact and fuzzy entity matching
-- source-to-source diff reports
-- failed-row quarantine and downloadable error files
+- downloadable validation/error packages
 - chunked large-file ingestion
-- multi-source merge recipes
+- saved multi-source merge recipes
 - automated refresh jobs
