@@ -18,6 +18,8 @@ from src.database import (
 )
 from src.exports import to_csv_bytes, to_excel_bytes, to_json_bytes, to_parquet_bytes
 from src.intake import load_bytes, load_url
+from src.geocode import geocode_dataframe
+from src.normalize import add_address_key, find_fuzzy_duplicates
 from src.quality import diff_frames, merge_frames, quarantine_required
 from src.sources import refresh_all_active_sources, refresh_source
 from src.transform import apply_transform, profile_frame
@@ -75,11 +77,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab_import, tab_clean, tab_merge, tab_sql, tab_export, tab_sources, tab_recipes = st.tabs(
+tab_import, tab_clean, tab_merge, tab_match, tab_sql, tab_export, tab_sources, tab_recipes = st.tabs(
     [
         "Import",
         "Clean & Transform",
         "Merge & Compare",
+        "Match & Geocode",
         "SQL Workbench",
         "Export & Neon",
         "Sources & Refresh",
@@ -303,6 +306,142 @@ with tab_merge:
                 st.success(f"Created {diff_name}.")
                 st.dataframe(counts, use_container_width=True, hide_index=True)
                 st.dataframe(diff.head(200).to_pandas(), use_container_width=True, hide_index=True)
+            except Exception as exc:
+                st.error(str(exc))
+
+
+with tab_match:
+    st.subheader("Match & geocode")
+    name = selected_dataset("match_dataset")
+
+    if not name:
+        st.info("Import a dataset first.")
+    else:
+        df = st.session_state.working[name]
+
+        st.markdown("#### Build a normalized address key")
+        a1, a2, a3 = st.columns(3)
+        street_col = a1.selectbox("Street", [""] + df.columns, key="addr_street")
+        city_col = a2.selectbox("City", [""] + df.columns, key="addr_city")
+        state_col = a3.selectbox("State / province", [""] + df.columns, key="addr_state")
+        a4, a5 = st.columns(2)
+        postal_col = a4.selectbox("Postal code (optional)", [""] + df.columns, key="addr_postal")
+        country_col = a5.selectbox("Country (optional)", [""] + df.columns, key="addr_country")
+
+        if st.button(
+            "Add normalized address key",
+            disabled=not (street_col and city_col and state_col),
+        ):
+            try:
+                updated = add_address_key(
+                    df,
+                    street_col,
+                    city_col,
+                    state_col,
+                    postal=postal_col or None,
+                    country=country_col or None,
+                )
+                st.session_state.working[name] = updated
+                df = updated
+                st.success("Added __address_key.")
+                st.dataframe(
+                    updated.select(
+                        [c for c in [street_col, city_col, state_col, postal_col, country_col, "__address_key"] if c]
+                    ).head(100).to_pandas(),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            except Exception as exc:
+                st.error(str(exc))
+
+        st.markdown("#### Find likely duplicate entities")
+        f1, f2 = st.columns([1, 1])
+        fuzzy_name = f1.selectbox("Name / entity column", [""] + df.columns, key="fuzzy_name")
+        fuzzy_blocks = f2.multiselect(
+            "Block within columns (recommended: city/state)",
+            df.columns,
+            key="fuzzy_blocks",
+        )
+        f3, f4 = st.columns(2)
+        threshold = f3.slider("Similarity threshold", 50, 100, 92, key="fuzzy_threshold")
+        max_pairs = f4.number_input(
+            "Maximum candidate comparisons",
+            min_value=100,
+            max_value=500000,
+            value=50000,
+            step=1000,
+            key="fuzzy_max_pairs",
+        )
+
+        if st.button("Find fuzzy duplicate pairs", disabled=not fuzzy_name):
+            try:
+                pairs = find_fuzzy_duplicates(
+                    df,
+                    fuzzy_name,
+                    block_columns=fuzzy_blocks,
+                    threshold=float(threshold),
+                    max_pairs=int(max_pairs),
+                )
+                pair_name = f"{name}__fuzzy_pairs"
+                register_frames({pair_name: pairs})
+                if pairs.height:
+                    st.warning(f"Found {pairs.height:,} candidate duplicate pair(s).")
+                    st.dataframe(pairs.head(500).to_pandas(), use_container_width=True, hide_index=True)
+                else:
+                    st.success("No candidate duplicate pairs met the selected threshold.")
+            except Exception as exc:
+                st.error(str(exc))
+
+        st.markdown("#### U.S. Census geocoding")
+        address_options = [""] + st.session_state.working[name].columns
+        address_col = st.selectbox(
+            "Full address column",
+            address_options,
+            index=address_options.index("__address_key") if "__address_key" in address_options else 0,
+            key="geocode_address",
+        )
+        g1, g2 = st.columns(2)
+        geocode_limit = g1.number_input(
+            "Maximum unique addresses this run",
+            min_value=1,
+            max_value=10000,
+            value=500,
+            step=100,
+        )
+        workers = g2.slider("Concurrent requests", 1, 8, 4)
+
+        if st.button("Geocode selected addresses", disabled=not address_col):
+            try:
+                with st.spinner("Geocoding addresses..."):
+                    geocoded = geocode_dataframe(
+                        st.session_state.working[name],
+                        address_col,
+                        max_rows=int(geocode_limit),
+                        workers=int(workers),
+                    )
+                st.session_state.working[name] = geocoded
+                counts = (
+                    geocoded.group_by("__geocode_status")
+                    .len()
+                    .sort("__geocode_status")
+                    .to_dicts()
+                )
+                st.success("Geocoding run completed.")
+                st.dataframe(counts, use_container_width=True, hide_index=True)
+                preview_cols = [
+                    c for c in [
+                        address_col,
+                        "__geocode_status",
+                        "__matched_address",
+                        "latitude",
+                        "longitude",
+                    ] if c in geocoded.columns
+                ]
+                st.dataframe(
+                    geocoded.select(preview_cols).head(200).to_pandas(),
+                    use_container_width=True,
+                    hide_index=True,
+                )
             except Exception as exc:
                 st.error(str(exc))
 
