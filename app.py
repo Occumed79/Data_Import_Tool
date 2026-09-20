@@ -9,9 +9,11 @@ import streamlit as st
 from src.database import (
     database_available,
     list_history,
+    list_merge_recipes,
     list_recipes,
     list_sources,
     rollback_import,
+    save_merge_recipe,
     save_recipe,
     save_source,
     write_frame,
@@ -280,6 +282,85 @@ with tab_merge:
                 st.success(f"Created {merged_name} with {merged.height:,} row(s).")
             except Exception as exc:
                 st.error(str(exc))
+
+        if database_available():
+            with st.expander("Save / reuse merge recipe"):
+                recipe_label = st.text_input(
+                    "Merge recipe name",
+                    placeholder="Provider directory + pricing merge",
+                    key="merge_recipe_name",
+                )
+                if st.button(
+                    "Save current merge recipe",
+                    disabled=not (recipe_label and join_keys),
+                    key="save_merge_recipe_button",
+                ):
+                    try:
+                        save_merge_recipe(
+                            recipe_label,
+                            left_name,
+                            right_name,
+                            join_keys,
+                            join_mode,
+                        )
+                        st.success(f"Saved merge recipe: {recipe_label}")
+                    except Exception as exc:
+                        st.error(str(exc))
+
+                try:
+                    merge_recipes = list_merge_recipes()
+                except Exception as exc:
+                    merge_recipes = []
+                    st.warning(f"Could not load merge recipes: {exc}")
+
+                if merge_recipes:
+                    recipe_map = {row["name"]: row for row in merge_recipes}
+                    selected_recipe_name = st.selectbox(
+                        "Saved merge recipe",
+                        list(recipe_map.keys()),
+                        key="saved_merge_recipe",
+                    )
+                    selected_recipe = recipe_map[selected_recipe_name]
+                    st.caption(
+                        f"{selected_recipe['left_dataset']} + "
+                        f"{selected_recipe['right_dataset']} on "
+                        f"{', '.join(selected_recipe['join_keys'])} "
+                        f"({selected_recipe['join_mode']})"
+                    )
+
+                    can_apply = (
+                        selected_recipe["left_dataset"] in st.session_state.working
+                        and selected_recipe["right_dataset"] in st.session_state.working
+                    )
+                    if st.button(
+                        "Run saved merge recipe",
+                        disabled=not can_apply,
+                        key="run_saved_merge_recipe",
+                    ):
+                        try:
+                            recipe_left = st.session_state.working[selected_recipe["left_dataset"]]
+                            recipe_right = st.session_state.working[selected_recipe["right_dataset"]]
+                            merged = merge_frames(
+                                recipe_left,
+                                recipe_right,
+                                list(selected_recipe["join_keys"]),
+                                selected_recipe["join_mode"],
+                            )
+                            merged_name = (
+                                f"{selected_recipe['left_dataset']}__merged__"
+                                f"{selected_recipe['right_dataset']}"
+                            )
+                            register_frames({merged_name: merged})
+                            st.success(
+                                f"Ran '{selected_recipe_name}'. "
+                                f"Created {merged_name} with {merged.height:,} row(s)."
+                            )
+                        except Exception as exc:
+                            st.error(str(exc))
+                    elif not can_apply:
+                        st.caption(
+                            "Load both datasets named in the saved recipe before running it."
+                        )
 
         st.markdown("#### Compare two versions")
         d1, d2 = st.columns(2)
