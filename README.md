@@ -36,6 +36,8 @@ The tool is deliberately separate from the Network Map, Vaccine Prescription Gen
 - Automatic snapshot before destructive Neon replace
 - Rollback for imports that have snapshots
 - Manual refresh of one source or all active sources from the UI
+- Per-source refresh cadence (hourly, 6-hourly, 12-hourly, daily, or weekly)
+- Conditional HTTP refreshes using ETag / Last-Modified when the source supports them
 - CLI refresh runner for scheduled jobs: `python scripts/refresh_sources.py`
 
 ## Architecture
@@ -91,10 +93,11 @@ For scheduled refreshes, create a normal Render Cron Job using the same reposito
 
 - Build command: pip install -r requirements.txt
 - Start command: python scripts/refresh_sources.py
-- Schedule: choose the cadence appropriate for the registered sources
+- Schedule: hourly
 - Environment variable: DATABASE_URL = the same Neon pooled connection string
+- Optional environment variable: UPLOADCARE_PUBLIC_KEY = Uploadcare public key for raw-source archiving
 
-The cron runner checks every active source, skips unchanged downloads, and refreshes only sources whose bytes changed.
+Each registered source carries its own cadence. The hourly runner selects only sources that are due, sends conditional ETag / Last-Modified requests when possible, skips HTTP 304 responses, then falls back to SHA-256 comparison before doing any table replacement.
 
 ## Tests
 
