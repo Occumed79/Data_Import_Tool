@@ -643,6 +643,19 @@ with tab_sources:
                 value=False,
                 help="Store each changed source file in Uploadcare when UPLOADCARE_PUBLIC_KEY is configured.",
             )
+            cadence_map = {
+                "Hourly": 60,
+                "Every 6 hours": 360,
+                "Every 12 hours": 720,
+                "Daily": 1440,
+                "Weekly": 10080,
+            }
+            cadence_label = st.selectbox(
+                "Automatic refresh cadence",
+                list(cadence_map.keys()),
+                index=3,
+            )
+            refresh_interval_minutes = cadence_map[cadence_label]
             saved = st.form_submit_button("Save source", type="primary")
 
         if saved:
@@ -657,6 +670,7 @@ with tab_sources:
                         recipe_name=recipe_name or None,
                         active=active,
                         archive_raw=archive_raw,
+                        refresh_interval_minutes=refresh_interval_minutes,
                     )
                     st.success(f"Saved source: {source_name}")
                 except Exception as exc:
@@ -679,6 +693,7 @@ with tab_sources:
                     "recipe": row.get("recipe_name"),
                     "active": row["active"],
                     "archive_raw": row.get("archive_raw"),
+                    "cadence_minutes": row.get("refresh_interval_minutes"),
                     "status": row.get("last_status"),
                     "last_checked": row.get("last_checked_at"),
                     "last_changed": row.get("last_changed_at"),
