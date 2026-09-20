@@ -26,7 +26,7 @@ from src.exports import (
     to_validation_zip,
 )
 from src.intake import load_bytes, load_url
-from src.geocode import geocode_dataframe
+from src.geocode import geocode_dataframe, mapbox_available, mapbox_geocode_dataframe
 from src.normalize import add_address_key, find_fuzzy_duplicates
 from src.quality import diff_frames, merge_frames, quarantine_required
 from src.sources import refresh_all_active_sources, refresh_source
@@ -512,7 +512,7 @@ with tab_match:
             except Exception as exc:
                 st.error(str(exc))
 
-        st.markdown("#### U.S. Census geocoding")
+        st.markdown("#### Geocoding")
         address_options = [""] + st.session_state.working[name].columns
         address_col = st.selectbox(
             "Full address column",
@@ -520,6 +520,19 @@ with tab_match:
             index=address_options.index("__address_key") if "__address_key" in address_options else 0,
             key="geocode_address",
         )
+
+        provider_options = ["U.S. Census"]
+        if mapbox_available():
+            provider_options.append("Mapbox Global")
+        geocode_provider = st.selectbox(
+            "Geocoding provider",
+            provider_options,
+            help=(
+                "U.S. Census requires no API key and is best for U.S. addresses. "
+                "Mapbox Global appears automatically when MAPBOX_ACCESS_TOKEN is configured."
+            ),
+        )
+
         g1, g2 = st.columns(2)
         geocode_limit = g1.number_input(
             "Maximum unique addresses this run",
@@ -528,17 +541,36 @@ with tab_match:
             value=500,
             step=100,
         )
-        workers = g2.slider("Concurrent requests", 1, 8, 4)
+
+        if geocode_provider == "U.S. Census":
+            workers = g2.slider("Concurrent requests", 1, 8, 4)
+            permanent = False
+        else:
+            workers = 1
+            permanent = g2.checkbox(
+                "Permanent / stored geocoding",
+                value=False,
+                help="Enable when your Mapbox account and intended use permit storing geocoding results.",
+            )
 
         if st.button("Geocode selected addresses", disabled=not address_col):
             try:
                 with st.spinner("Geocoding addresses..."):
-                    geocoded = geocode_dataframe(
-                        st.session_state.working[name],
-                        address_col,
-                        max_rows=int(geocode_limit),
-                        workers=int(workers),
-                    )
+                    if geocode_provider == "Mapbox Global":
+                        geocoded = mapbox_geocode_dataframe(
+                            st.session_state.working[name],
+                            address_col,
+                            max_rows=int(geocode_limit),
+                            permanent=bool(permanent),
+                        )
+                    else:
+                        geocoded = geocode_dataframe(
+                            st.session_state.working[name],
+                            address_col,
+                            max_rows=int(geocode_limit),
+                            workers=int(workers),
+                        )
+
                 st.session_state.working[name] = geocoded
                 counts = (
                     geocoded.group_by("__geocode_status")
@@ -551,7 +583,9 @@ with tab_match:
                 preview_cols = [
                     c for c in [
                         address_col,
+                        "__geocode_provider",
                         "__geocode_status",
+                        "__geocode_confidence",
                         "__matched_address",
                         "latitude",
                         "longitude",
