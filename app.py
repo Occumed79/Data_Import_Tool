@@ -100,7 +100,12 @@ tab_import, tab_clean, tab_merge, tab_match, tab_sql, tab_export, tab_sources, t
 
 
 def register_frames(frames: dict[str, pl.DataFrame]) -> None:
-    for name, frame in frames.items():
+    for requested_name, frame in frames.items():
+        name = requested_name
+        suffix = 2
+        while name in st.session_state.working:
+            name = f"{requested_name}_{suffix}"
+            suffix += 1
         st.session_state.datasets[name] = frame
         st.session_state.working[name] = frame
         st.session_state.configs[name] = {}
@@ -155,6 +160,34 @@ with tab_import:
                 st.success(f"Loaded {len(frames)} dataset(s) from URL.")
             except Exception as exc:
                 st.error(str(exc))
+
+        with st.expander("Bulk URL import"):
+            bulk_urls_text = st.text_area(
+                "One direct file URL per line",
+                placeholder="https://.../one.csv\nhttps://.../two.xlsx\nhttps://.../three.zip",
+                height=140,
+            )
+            bulk_urls = [
+                line.strip()
+                for line in bulk_urls_text.splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+            if st.button("Load all URLs", disabled=not bulk_urls):
+                loaded = 0
+                failures = []
+                for bulk_url in bulk_urls:
+                    try:
+                        frames = load_url(bulk_url)
+                        register_frames(frames)
+                        loaded += len(frames)
+                    except Exception as exc:
+                        failures.append({"url": bulk_url, "error": str(exc)})
+
+                if loaded:
+                    st.success(f"Loaded {loaded} dataset(s) from {len(bulk_urls)} URL(s).")
+                if failures:
+                    st.warning(f"{len(failures)} URL(s) failed.")
+                    st.dataframe(failures, use_container_width=True, hide_index=True)
 
     if st.session_state.working:
         name = selected_dataset("import_dataset")
