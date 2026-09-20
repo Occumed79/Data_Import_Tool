@@ -57,6 +57,25 @@ def ensure_metadata_tables(engine=None) -> None:
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS dit_sources (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                url TEXT NOT NULL,
+                target_table TEXT NOT NULL,
+                recipe_name TEXT,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                last_hash TEXT,
+                last_etag TEXT,
+                last_modified TEXT,
+                last_status TEXT,
+                last_error TEXT,
+                last_checked_at TIMESTAMPTZ,
+                last_changed_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """))
 
 
 def save_recipe(name: str, config: dict[str, Any]) -> None:
@@ -101,6 +120,112 @@ def list_history(limit: int = 100) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def save_source(
+    name: str,
+    url: str,
+    target_table: str,
+    recipe_name: str | None = None,
+    active: bool = True,
+) -> None:
+    engine = get_engine()
+    ensure_metadata_tables(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO dit_sources (name, url, target_table, recipe_name, active)
+                VALUES (:name, :url, :target_table, :recipe_name, :active)
+                ON CONFLICT (name)
+                DO UPDATE SET
+                    url = EXCLUDED.url,
+                    target_table = EXCLUDED.target_table,
+                    recipe_name = EXCLUDED.recipe_name,
+                    active = EXCLUDED.active,
+                    updated_at = NOW()
+            """),
+            {
+                "name": name.strip(),
+                "url": url.strip(),
+                "target_table": safe_identifier(target_table),
+                "recipe_name": recipe_name or None,
+                "active": bool(active),
+            },
+        )
+
+
+def list_sources(active_only: bool = False) -> list[dict[str, Any]]:
+    engine = get_engine()
+    ensure_metadata_tables(engine)
+    query = """
+        SELECT
+            id, name, url, target_table, recipe_name, active,
+            last_hash, last_etag, last_modified, last_status, last_error,
+            last_checked_at, last_changed_at, created_at, updated_at
+        FROM dit_sources
+    """
+    if active_only:
+        query += " WHERE active = TRUE"
+    query += " ORDER BY name"
+    with engine.begin() as conn:
+        rows = conn.execute(text(query)).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def get_source(source_id: int) -> dict[str, Any] | None:
+    engine = get_engine()
+    ensure_metadata_tables(engine)
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("""
+                SELECT
+                    id, name, url, target_table, recipe_name, active,
+                    last_hash, last_etag, last_modified, last_status, last_error,
+                    last_checked_at, last_changed_at, created_at, updated_at
+                FROM dit_sources
+                WHERE id = :id
+            """),
+            {"id": int(source_id)},
+        ).mappings().first()
+    return dict(row) if row else None
+
+
+def update_source_refresh_state(
+    source_id: int,
+    status: str,
+    source_hash: str | None = None,
+    etag: str | None = None,
+    last_modified: str | None = None,
+    changed: bool = False,
+    error: str | None = None,
+) -> None:
+    engine = get_engine()
+    ensure_metadata_tables(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                UPDATE dit_sources
+                SET
+                    last_status = :status,
+                    last_hash = COALESCE(:source_hash, last_hash),
+                    last_etag = COALESCE(:etag, last_etag),
+                    last_modified = COALESCE(:last_modified, last_modified),
+                    last_error = :error,
+                    last_checked_at = NOW(),
+                    last_changed_at = CASE WHEN :changed THEN NOW() ELSE last_changed_at END,
+                    updated_at = NOW()
+                WHERE id = :id
+            """),
+            {
+                "id": int(source_id),
+                "status": status,
+                "source_hash": source_hash,
+                "etag": etag,
+                "last_modified": last_modified,
+                "changed": bool(changed),
+                "error": error,
+            },
+        )
+
+
 def write_frame(
     df: pl.DataFrame,
     table_name: str,
@@ -123,14 +248,27 @@ def write_frame(
             snapshot_table = safe_identifier(f"_dit_snapshot_{table}_{stamp}")
             conn.execute(text(f'CREATE TABLE "{snapshot_table}" AS TABLE "{table}"'))
 
-        df.to_pandas().to_sql(
-            table,
-            con=conn,
-            if_exists=mode,
-            index=False,
-            method="multi",
-            chunksize=1000,
-        )
+        chunk_size = 10_000
+        first = True
+        for chunk in df.iter_slices(n_rows=chunk_size):
+            if_exists = mode if first else "append"
+            chunk.to_pandas().to_sql(
+                table,
+                con=conn,
+                if_exists=if_exists,
+                index=False,
+                method="multi",
+                chunksize=1000,
+            )
+            first = False
+
+        if df.height == 0:
+            df.to_pandas().head(0).to_sql(
+                table,
+                con=conn,
+                if_exists=mode,
+                index=False,
+            )
 
         import_id = conn.execute(
             text("""
