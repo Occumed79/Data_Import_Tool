@@ -634,10 +634,15 @@ with tab_sources:
             s1, s2 = st.columns(2)
             source_name = s1.text_input("Source name", placeholder="CDC Adult Vaccination Coverage")
             source_url = s2.text_input("Direct source URL", placeholder="https://.../dataset.csv")
-            s3, s4, s5 = st.columns([1, 1, 0.5])
+            s3, s4, s5, s6 = st.columns([1, 1, 0.45, 0.7])
             target_table = s3.text_input("Target table", placeholder="cdc_adult_coverage")
             recipe_name = s4.selectbox("Transform recipe", recipe_names)
             active = s5.checkbox("Active", value=True)
+            archive_raw = s6.checkbox(
+                "Archive raw",
+                value=False,
+                help="Store each changed source file in Uploadcare when UPLOADCARE_PUBLIC_KEY is configured.",
+            )
             saved = st.form_submit_button("Save source", type="primary")
 
         if saved:
@@ -651,6 +656,7 @@ with tab_sources:
                         target_table,
                         recipe_name=recipe_name or None,
                         active=active,
+                        archive_raw=archive_raw,
                     )
                     st.success(f"Saved source: {source_name}")
                 except Exception as exc:
@@ -672,10 +678,12 @@ with tab_sources:
                     "target_table": row["target_table"],
                     "recipe": row.get("recipe_name"),
                     "active": row["active"],
+                    "archive_raw": row.get("archive_raw"),
                     "status": row.get("last_status"),
                     "last_checked": row.get("last_checked_at"),
                     "last_changed": row.get("last_changed_at"),
                     "last_error": row.get("last_error"),
+                    "archive_url": row.get("last_archive_url"),
                     "url": row["url"],
                 })
             st.dataframe(display_rows, use_container_width=True, hide_index=True)
@@ -704,6 +712,10 @@ with tab_sources:
                             )
                             if result["tables"]:
                                 st.dataframe(result["tables"], use_container_width=True, hide_index=True)
+                            if result.get("archive"):
+                                st.success(f"Raw source archived: {result['archive']['url']}")
+                            if result.get("archive_warning"):
+                                st.warning(result["archive_warning"])
                     except Exception as exc:
                         st.error(str(exc))
 
