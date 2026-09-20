@@ -18,7 +18,13 @@ from src.database import (
     save_source,
     write_frame,
 )
-from src.exports import to_csv_bytes, to_excel_bytes, to_json_bytes, to_parquet_bytes
+from src.exports import (
+    to_csv_bytes,
+    to_excel_bytes,
+    to_json_bytes,
+    to_parquet_bytes,
+    to_validation_zip,
+)
 from src.intake import load_bytes, load_url
 from src.geocode import geocode_dataframe
 from src.normalize import add_address_key, find_fuzzy_duplicates
@@ -596,6 +602,24 @@ with tab_export:
             file_name=f"{name}_clean.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
+        )
+
+        quarantine_name = f"{name}__quarantine"
+        quarantine_df = st.session_state.working.get(quarantine_name)
+        package = to_validation_zip(
+            df,
+            name,
+            profile=profile_frame(df),
+            quarantine=quarantine_df,
+            transform_config=st.session_state.configs.get(name) or None,
+        )
+        st.download_button(
+            "Download validation package (.zip)",
+            data=package,
+            file_name=f"{name}_validation_package.zip",
+            mime="application/zip",
+            use_container_width=True,
+            help="Includes clean CSV, quarantine CSV when available, column profile, transform recipe, and manifest.",
         )
 
         st.markdown("#### Write to Neon / Postgres")
