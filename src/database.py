@@ -65,6 +65,18 @@ def ensure_metadata_tables(engine=None) -> None:
                 ADD COLUMN IF NOT EXISTS recipe_name TEXT
         """))
         conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS dit_merge_recipes (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                left_dataset TEXT NOT NULL,
+                right_dataset TEXT NOT NULL,
+                join_keys JSONB NOT NULL,
+                join_mode TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """))
+        conn.execute(text("""
             CREATE TABLE IF NOT EXISTS dit_sources (
                 id BIGSERIAL PRIMARY KEY,
                 name TEXT UNIQUE NOT NULL,
@@ -125,6 +137,59 @@ def list_history(limit: int = 100) -> list[dict[str, Any]]:
                 LIMIT :limit
             """),
             {"limit": limit},
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def save_merge_recipe(
+    name: str,
+    left_dataset: str,
+    right_dataset: str,
+    join_keys: list[str],
+    join_mode: str,
+) -> None:
+    if not join_keys:
+        raise ValueError("At least one join key is required.")
+    if join_mode not in {"left", "inner", "full"}:
+        raise ValueError("Unsupported join mode.")
+
+    engine = get_engine()
+    ensure_metadata_tables(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO dit_merge_recipes
+                    (name, left_dataset, right_dataset, join_keys, join_mode)
+                VALUES
+                    (:name, :left_dataset, :right_dataset, CAST(:join_keys AS JSONB), :join_mode)
+                ON CONFLICT (name)
+                DO UPDATE SET
+                    left_dataset = EXCLUDED.left_dataset,
+                    right_dataset = EXCLUDED.right_dataset,
+                    join_keys = EXCLUDED.join_keys,
+                    join_mode = EXCLUDED.join_mode,
+                    updated_at = NOW()
+            """),
+            {
+                "name": name.strip(),
+                "left_dataset": left_dataset,
+                "right_dataset": right_dataset,
+                "join_keys": json.dumps(join_keys),
+                "join_mode": join_mode,
+            },
+        )
+
+
+def list_merge_recipes() -> list[dict[str, Any]]:
+    engine = get_engine()
+    ensure_metadata_tables(engine)
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT id, name, left_dataset, right_dataset, join_keys, join_mode, updated_at
+                FROM dit_merge_recipes
+                ORDER BY updated_at DESC
+            """)
         ).mappings().all()
     return [dict(row) for row in rows]
 
