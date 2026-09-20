@@ -62,7 +62,9 @@ def ensure_metadata_tables(engine=None) -> None:
                 ADD COLUMN IF NOT EXISTS source_id BIGINT,
                 ADD COLUMN IF NOT EXISTS source_url TEXT,
                 ADD COLUMN IF NOT EXISTS source_hash TEXT,
-                ADD COLUMN IF NOT EXISTS recipe_name TEXT
+                ADD COLUMN IF NOT EXISTS recipe_name TEXT,
+                ADD COLUMN IF NOT EXISTS archive_uuid TEXT,
+                ADD COLUMN IF NOT EXISTS archive_url TEXT
         """))
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS dit_merge_recipes (
@@ -84,7 +86,10 @@ def ensure_metadata_tables(engine=None) -> None:
                 target_table TEXT NOT NULL,
                 recipe_name TEXT,
                 active BOOLEAN NOT NULL DEFAULT TRUE,
+                archive_raw BOOLEAN NOT NULL DEFAULT FALSE,
                 last_hash TEXT,
+                last_archive_uuid TEXT,
+                last_archive_url TEXT,
                 last_etag TEXT,
                 last_modified TEXT,
                 last_status TEXT,
@@ -94,6 +99,12 @@ def ensure_metadata_tables(engine=None) -> None:
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+        """))
+        conn.execute(text("""
+            ALTER TABLE dit_sources
+                ADD COLUMN IF NOT EXISTS archive_raw BOOLEAN NOT NULL DEFAULT FALSE,
+                ADD COLUMN IF NOT EXISTS last_archive_uuid TEXT,
+                ADD COLUMN IF NOT EXISTS last_archive_url TEXT
         """))
 
 
@@ -131,6 +142,7 @@ def list_history(limit: int = 100) -> list[dict[str, Any]]:
             text("""
                 SELECT
                     id, source_id, source_name, source_url, source_hash, recipe_name,
+                    archive_uuid, archive_url,
                     target_table, row_count, mode, snapshot_table, created_at
                 FROM dit_import_history
                 ORDER BY id DESC
@@ -200,20 +212,24 @@ def save_source(
     target_table: str,
     recipe_name: str | None = None,
     active: bool = True,
+    archive_raw: bool = False,
 ) -> None:
     engine = get_engine()
     ensure_metadata_tables(engine)
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO dit_sources (name, url, target_table, recipe_name, active)
-                VALUES (:name, :url, :target_table, :recipe_name, :active)
+                INSERT INTO dit_sources
+                    (name, url, target_table, recipe_name, active, archive_raw)
+                VALUES
+                    (:name, :url, :target_table, :recipe_name, :active, :archive_raw)
                 ON CONFLICT (name)
                 DO UPDATE SET
                     url = EXCLUDED.url,
                     target_table = EXCLUDED.target_table,
                     recipe_name = EXCLUDED.recipe_name,
                     active = EXCLUDED.active,
+                    archive_raw = EXCLUDED.archive_raw,
                     updated_at = NOW()
             """),
             {
@@ -222,6 +238,7 @@ def save_source(
                 "target_table": safe_identifier(target_table),
                 "recipe_name": recipe_name or None,
                 "active": bool(active),
+                "archive_raw": bool(archive_raw),
             },
         )
 
@@ -231,8 +248,9 @@ def list_sources(active_only: bool = False) -> list[dict[str, Any]]:
     ensure_metadata_tables(engine)
     query = """
         SELECT
-            id, name, url, target_table, recipe_name, active,
-            last_hash, last_etag, last_modified, last_status, last_error,
+            id, name, url, target_table, recipe_name, active, archive_raw,
+            last_hash, last_archive_uuid, last_archive_url,
+            last_etag, last_modified, last_status, last_error,
             last_checked_at, last_changed_at, created_at, updated_at
         FROM dit_sources
     """
@@ -251,8 +269,9 @@ def get_source(source_id: int) -> dict[str, Any] | None:
         row = conn.execute(
             text("""
                 SELECT
-                    id, name, url, target_table, recipe_name, active,
-                    last_hash, last_etag, last_modified, last_status, last_error,
+                    id, name, url, target_table, recipe_name, active, archive_raw,
+                    last_hash, last_archive_uuid, last_archive_url,
+                    last_etag, last_modified, last_status, last_error,
                     last_checked_at, last_changed_at, created_at, updated_at
                 FROM dit_sources
                 WHERE id = :id
@@ -270,6 +289,8 @@ def update_source_refresh_state(
     last_modified: str | None = None,
     changed: bool = False,
     error: str | None = None,
+    archive_uuid: str | None = None,
+    archive_url: str | None = None,
 ) -> None:
     engine = get_engine()
     ensure_metadata_tables(engine)
@@ -280,6 +301,8 @@ def update_source_refresh_state(
                 SET
                     last_status = :status,
                     last_hash = COALESCE(:source_hash, last_hash),
+                    last_archive_uuid = COALESCE(:archive_uuid, last_archive_uuid),
+                    last_archive_url = COALESCE(:archive_url, last_archive_url),
                     last_etag = COALESCE(:etag, last_etag),
                     last_modified = COALESCE(:last_modified, last_modified),
                     last_error = :error,
@@ -296,6 +319,8 @@ def update_source_refresh_state(
                 "last_modified": last_modified,
                 "changed": bool(changed),
                 "error": error,
+                "archive_uuid": archive_uuid,
+                "archive_url": archive_url,
             },
         )
 
@@ -309,6 +334,8 @@ def write_frame(
     source_url: str | None = None,
     source_hash: str | None = None,
     recipe_name: str | None = None,
+    archive_uuid: str | None = None,
+    archive_url: str | None = None,
 ) -> dict[str, Any]:
     if mode not in {"append", "replace"}:
         raise ValueError("mode must be append or replace")
@@ -353,11 +380,13 @@ def write_frame(
                 INSERT INTO dit_import_history
                     (
                         source_id, source_name, source_url, source_hash, recipe_name,
+                        archive_uuid, archive_url,
                         target_table, row_count, mode, snapshot_table
                     )
                 VALUES
                     (
                         :source_id, :source_name, :source_url, :source_hash, :recipe_name,
+                        :archive_uuid, :archive_url,
                         :target_table, :row_count, :mode, :snapshot_table
                     )
                 RETURNING id
@@ -368,6 +397,8 @@ def write_frame(
                 "source_url": source_url,
                 "source_hash": source_hash,
                 "recipe_name": recipe_name,
+                "archive_uuid": archive_uuid,
+                "archive_url": archive_url,
                 "target_table": table,
                 "row_count": df.height,
                 "mode": mode,
