@@ -10,13 +10,16 @@ from src.database import (
     database_available,
     list_history,
     list_recipes,
+    list_sources,
     rollback_import,
     save_recipe,
+    save_source,
     write_frame,
 )
 from src.exports import to_csv_bytes, to_excel_bytes, to_json_bytes, to_parquet_bytes
 from src.intake import load_bytes, load_url
 from src.quality import diff_frames, merge_frames, quarantine_required
+from src.sources import refresh_all_active_sources, refresh_source
 from src.transform import apply_transform, profile_frame
 
 
@@ -72,8 +75,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab_import, tab_clean, tab_merge, tab_sql, tab_export, tab_recipes = st.tabs(
-    ["Import", "Clean & Transform", "Merge & Compare", "SQL Workbench", "Export & Neon", "Recipes & History"]
+tab_import, tab_clean, tab_merge, tab_sql, tab_export, tab_sources, tab_recipes = st.tabs(
+    [
+        "Import",
+        "Clean & Transform",
+        "Merge & Compare",
+        "SQL Workbench",
+        "Export & Neon",
+        "Sources & Refresh",
+        "Recipes & History",
+    ]
 )
 
 
@@ -385,6 +396,117 @@ with tab_export:
                     st.error(str(exc))
         else:
             st.info('Set DATABASE_URL to enable persistent recipes, direct Neon loading, history, and rollback.')
+
+
+with tab_sources:
+    st.subheader("Sources & refresh")
+    if not database_available():
+        st.info("Set DATABASE_URL to enable saved source URLs and automatic refresh tracking.")
+    else:
+        st.markdown("#### Register a reusable source")
+        try:
+            recipe_rows = list_recipes()
+            recipe_names = [""] + [row["name"] for row in recipe_rows]
+        except Exception:
+            recipe_names = [""]
+
+        with st.form("source_registry_form"):
+            s1, s2 = st.columns(2)
+            source_name = s1.text_input("Source name", placeholder="CDC Adult Vaccination Coverage")
+            source_url = s2.text_input("Direct source URL", placeholder="https://.../dataset.csv")
+            s3, s4, s5 = st.columns([1, 1, 0.5])
+            target_table = s3.text_input("Target table", placeholder="cdc_adult_coverage")
+            recipe_name = s4.selectbox("Transform recipe", recipe_names)
+            active = s5.checkbox("Active", value=True)
+            saved = st.form_submit_button("Save source", type="primary")
+
+        if saved:
+            if not source_name or not source_url or not target_table:
+                st.error("Source name, URL, and target table are required.")
+            else:
+                try:
+                    save_source(
+                        source_name,
+                        source_url,
+                        target_table,
+                        recipe_name=recipe_name or None,
+                        active=active,
+                    )
+                    st.success(f"Saved source: {source_name}")
+                except Exception as exc:
+                    st.error(str(exc))
+
+        try:
+            sources = list_sources()
+        except Exception as exc:
+            sources = []
+            st.error(f"Could not load sources: {exc}")
+
+        if sources:
+            st.markdown("#### Registered sources")
+            display_rows = []
+            for row in sources:
+                display_rows.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "target_table": row["target_table"],
+                    "recipe": row.get("recipe_name"),
+                    "active": row["active"],
+                    "status": row.get("last_status"),
+                    "last_checked": row.get("last_checked_at"),
+                    "last_changed": row.get("last_changed_at"),
+                    "last_error": row.get("last_error"),
+                    "url": row["url"],
+                })
+            st.dataframe(display_rows, use_container_width=True, hide_index=True)
+
+            labels = {
+                f"#{row['id']} — {row['name']}": row["id"]
+                for row in sources
+            }
+            selected_label = st.selectbox("Source to refresh", list(labels.keys()))
+            force_refresh = st.checkbox(
+                "Force refresh even if source bytes are unchanged",
+                value=False,
+            )
+            r1, r2 = st.columns(2)
+
+            with r1:
+                if st.button("Refresh selected source", type="primary"):
+                    try:
+                        result = refresh_source(labels[selected_label], force=force_refresh)
+                        if result["status"] == "unchanged":
+                            st.info("Source checked successfully. No content change detected.")
+                        else:
+                            st.success(
+                                f"Source refreshed: {result['rows']:,} row(s) written across "
+                                f"{len(result['tables'])} table(s)."
+                            )
+                            if result["tables"]:
+                                st.dataframe(result["tables"], use_container_width=True, hide_index=True)
+                    except Exception as exc:
+                        st.error(str(exc))
+
+            with r2:
+                if st.button("Refresh all active sources"):
+                    try:
+                        results = refresh_all_active_sources(force=force_refresh)
+                        st.dataframe(results, use_container_width=True, hide_index=True)
+                        failures = [row for row in results if row.get("status") == "error"]
+                        if failures:
+                            st.warning(f"{len(failures)} source(s) failed. See the results table.")
+                        else:
+                            st.success(f"Checked {len(results)} active source(s).")
+                    except Exception as exc:
+                        st.error(str(exc))
+
+            st.caption(
+                "The source refresher hashes each downloaded file. Unchanged files are skipped; "
+                "changed files are transformed with the selected recipe and replace the target table "
+                "with the existing table snapshotted first."
+            )
+        else:
+            st.caption("No reusable sources registered yet.")
 
 
 with tab_recipes:
