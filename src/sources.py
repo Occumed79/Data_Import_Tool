@@ -8,6 +8,7 @@ from typing import Any
 import polars as pl
 import requests
 
+from src.archive import archive_bytes, uploadcare_available
 from src.database import (
     get_source,
     list_recipes,
@@ -97,6 +98,23 @@ def refresh_source(source_id: int, force: bool = False) -> dict[str, Any]:
             "rows": 0,
         }
 
+    archive = None
+    archive_warning = None
+    if source.get("archive_raw"):
+        if uploadcare_available():
+            try:
+                archive = archive_bytes(
+                    downloaded.filename,
+                    downloaded.content,
+                    source_name=source["name"],
+                    source_url=source["url"],
+                    source_hash=downloaded.sha256,
+                )
+            except Exception as exc:
+                archive_warning = f"Raw archive failed: {exc}"
+        else:
+            archive_warning = "Raw archive requested but UPLOADCARE_PUBLIC_KEY is not configured."
+
     frames = load_bytes(downloaded.filename, downloaded.content)
     recipe = _recipe_config(source.get("recipe_name"))
     written = []
@@ -115,6 +133,8 @@ def refresh_source(source_id: int, force: bool = False) -> dict[str, Any]:
             source_url=source["url"],
             source_hash=downloaded.sha256,
             recipe_name=source.get("recipe_name"),
+            archive_uuid=archive.get("uuid") if archive else None,
+            archive_url=archive.get("url") if archive else None,
         )
         written.append({
             "dataset": dataset_name,
@@ -132,12 +152,16 @@ def refresh_source(source_id: int, force: bool = False) -> dict[str, Any]:
         last_modified=downloaded.last_modified,
         changed=True,
         error=None,
+        archive_uuid=archive.get("uuid") if archive else None,
+        archive_url=archive.get("url") if archive else None,
     )
 
     return {
         "source_id": source_id,
         "status": "updated",
         "hash": downloaded.sha256,
+        "archive": archive,
+        "archive_warning": archive_warning,
         "tables": written,
         "rows": total_rows,
     }
