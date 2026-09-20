@@ -19,6 +19,9 @@ The tool is deliberately separate from the Network Map, Vaccine Prescription Gen
 - Title-case selected columns
 - US phone normalization
 - Optional provider-type classification
+- Address-key normalization for street/city/state/postal/country fields
+- Fuzzy duplicate/entity matching with optional city/state blocking
+- U.S. Census geocoding with status and matched-address output
 - De-duplicate on selected keys
 - Remove fully blank rows
 - Required-field validation with failed-row quarantine
@@ -100,9 +103,8 @@ The cron runner checks every active source, skips unchanged downloads, and refre
 The code is modular so the next additions can include:
 
 - raw file archive integration
-- Census/geocoding adapters
-- richer address normalization
-- exact and fuzzy entity matching
+- additional international geocoding adapters
+- richer international address normalization
 - downloadable validation/error packages
 - chunked large-file ingestion
 - saved multi-source merge recipes
