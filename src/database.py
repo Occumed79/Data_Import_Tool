@@ -58,6 +58,13 @@ def ensure_metadata_tables(engine=None) -> None:
             )
         """))
         conn.execute(text("""
+            ALTER TABLE dit_import_history
+                ADD COLUMN IF NOT EXISTS source_id BIGINT,
+                ADD COLUMN IF NOT EXISTS source_url TEXT,
+                ADD COLUMN IF NOT EXISTS source_hash TEXT,
+                ADD COLUMN IF NOT EXISTS recipe_name TEXT
+        """))
+        conn.execute(text("""
             CREATE TABLE IF NOT EXISTS dit_sources (
                 id BIGSERIAL PRIMARY KEY,
                 name TEXT UNIQUE NOT NULL,
@@ -110,7 +117,9 @@ def list_history(limit: int = 100) -> list[dict[str, Any]]:
     with engine.begin() as conn:
         rows = conn.execute(
             text("""
-                SELECT id, source_name, target_table, row_count, mode, snapshot_table, created_at
+                SELECT
+                    id, source_id, source_name, source_url, source_hash, recipe_name,
+                    target_table, row_count, mode, snapshot_table, created_at
                 FROM dit_import_history
                 ORDER BY id DESC
                 LIMIT :limit
@@ -231,6 +240,10 @@ def write_frame(
     table_name: str,
     source_name: str = "",
     mode: str = "append",
+    source_id: int | None = None,
+    source_url: str | None = None,
+    source_hash: str | None = None,
+    recipe_name: str | None = None,
 ) -> dict[str, Any]:
     if mode not in {"append", "replace"}:
         raise ValueError("mode must be append or replace")
@@ -273,13 +286,23 @@ def write_frame(
         import_id = conn.execute(
             text("""
                 INSERT INTO dit_import_history
-                    (source_name, target_table, row_count, mode, snapshot_table)
+                    (
+                        source_id, source_name, source_url, source_hash, recipe_name,
+                        target_table, row_count, mode, snapshot_table
+                    )
                 VALUES
-                    (:source_name, :target_table, :row_count, :mode, :snapshot_table)
+                    (
+                        :source_id, :source_name, :source_url, :source_hash, :recipe_name,
+                        :target_table, :row_count, :mode, :snapshot_table
+                    )
                 RETURNING id
             """),
             {
+                "source_id": source_id,
                 "source_name": source_name,
+                "source_url": source_url,
+                "source_hash": source_hash,
+                "recipe_name": recipe_name,
                 "target_table": table,
                 "row_count": df.height,
                 "mode": mode,
