@@ -111,6 +111,10 @@ def refresh_source(source_id: int, force: bool = False) -> dict[str, Any]:
             target,
             source_name=source["name"],
             mode="replace",
+            source_id=source["id"],
+            source_url=source["url"],
+            source_hash=downloaded.sha256,
+            recipe_name=source.get("recipe_name"),
         )
         written.append({
             "dataset": dataset_name,
