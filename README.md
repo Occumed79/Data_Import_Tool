@@ -8,6 +8,7 @@ The tool is deliberately separate from the Network Map, Vaccine Prescription Gen
 
 - Upload CSV, TSV, XLSX/XLS, JSON/NDJSON, Parquet, and ZIP files
 - Pull files from a direct URL
+- Bulk-import multiple direct file URLs in one pass
 - Register persistent source URLs in Neon for repeatable refreshes
 - SHA-256 change detection so unchanged sources are skipped automatically
 - Optional raw-source archiving to Uploadcare for changed source files
@@ -23,6 +24,7 @@ The tool is deliberately separate from the Network Map, Vaccine Prescription Gen
 - Address-key normalization for street/city/state/postal/country fields
 - Fuzzy duplicate/entity matching with optional city/state blocking
 - U.S. Census geocoding with status and matched-address output
+- Mapbox Geocoding v6 batch support for global addresses when MAPBOX_ACCESS_TOKEN is configured
 - De-duplicate on selected keys
 - Remove fully blank rows
 - Required-field validation with failed-row quarantine
@@ -86,6 +88,7 @@ Create a normal Render Web Service manually from this GitHub repository.
 - Start command: streamlit run app.py --server.address 0.0.0.0 --server.port $PORT
 - Environment variable: DATABASE_URL = your Neon pooled PostgreSQL connection string
 - Optional environment variable: UPLOADCARE_PUBLIC_KEY = Uploadcare public key for raw-source archiving
+- Optional environment variable: MAPBOX_ACCESS_TOKEN = Mapbox token for global batch geocoding
 
 No database is required just to use the file cleaning and export workbench. Neon enables persistent recipes, registered source URLs, refresh/change tracking, direct table loading, import history, and rollback snapshots.
 
@@ -108,7 +111,7 @@ Each registered source carries its own cadence. The hourly runner selects only s
 The code is modular so the next additions can include:
 
 - S3/R2 raw archive adapters in addition to Uploadcare
-- additional international geocoding adapters
+- additional international geocoding adapters beyond Mapbox
 - richer international address normalization
 - downloadable validation/error packages
 - chunked large-file ingestion
