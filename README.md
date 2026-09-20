@@ -8,6 +8,8 @@ The tool is deliberately separate from the Network Map, Vaccine Prescription Gen
 
 - Upload CSV, TSV, XLSX/XLS, JSON/NDJSON, Parquet, and ZIP files
 - Pull files from a direct URL
+- Register persistent source URLs in Neon for repeatable refreshes
+- SHA-256 change detection so unchanged sources are skipped automatically
 - Multi-sheet Excel ingestion
 - ZIP batch ingestion
 - Column profiling: type, nulls, null %, unique values
@@ -25,10 +27,12 @@ The tool is deliberately separate from the Network Map, Vaccine Prescription Gen
 - Save reusable transformation recipes
 - Run read-only DuckDB SQL against the current dataset
 - Export clean data to CSV, JSON, Parquet, or XLSX
-- Optional direct write to Neon/Postgres
+- Optional direct write to Neon/Postgres with chunked writes to reduce peak memory
 - Import history
 - Automatic snapshot before destructive Neon replace
 - Rollback for imports that have snapshots
+- Manual refresh of one source or all active sources from the UI
+- CLI refresh runner for scheduled jobs: `python scripts/refresh_sources.py`
 
 ## Architecture
 
@@ -50,6 +54,8 @@ The tool is deliberately separate from the Network Map, Vaccine Prescription Gen
             +------> Neon / Postgres
                         |
                         +--> downstream apps
+
+Registered URL sources now keep refresh state in Neon, including the last content hash, ETag/Last-Modified metadata when available, last check, last change, status, and error. A changed source is transformed with its saved recipe and replaces its target table only after the existing table is snapshotted.
 
 The raw-file archive layer can later be connected to Uploadcare, S3, or R2 without changing the transform or database layers.
 
@@ -74,7 +80,16 @@ Create a normal Render Web Service manually from this GitHub repository.
 - Start command: streamlit run app.py --server.address 0.0.0.0 --server.port $PORT
 - Environment variable: DATABASE_URL = your Neon pooled PostgreSQL connection string
 
-No database is required just to use the file cleaning and export workbench. Neon enables persistent recipes, direct table loading, import history, and rollback snapshots.
+No database is required just to use the file cleaning and export workbench. Neon enables persistent recipes, registered source URLs, refresh/change tracking, direct table loading, import history, and rollback snapshots.
+
+For scheduled refreshes, create a normal Render Cron Job using the same repository and environment variables:
+
+- Build command: pip install -r requirements.txt
+- Start command: python scripts/refresh_sources.py
+- Schedule: choose the cadence appropriate for the registered sources
+- Environment variable: DATABASE_URL = the same Neon pooled connection string
+
+The cron runner checks every active source, skips unchanged downloads, and refreshes only sources whose bytes changed.
 
 ## Tests
 
@@ -84,7 +99,6 @@ No database is required just to use the file cleaning and export workbench. Neon
 
 The code is modular so the next additions can include:
 
-- URL/source scheduling
 - raw file archive integration
 - Census/geocoding adapters
 - richer address normalization
