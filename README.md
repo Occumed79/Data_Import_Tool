@@ -10,6 +10,7 @@ The tool is deliberately separate from the Network Map, Vaccine Prescription Gen
 - Pull files from a direct URL
 - Register persistent source URLs in Neon for repeatable refreshes
 - SHA-256 change detection so unchanged sources are skipped automatically
+- Optional raw-source archiving to Uploadcare for changed source files
 - Multi-sheet Excel ingestion
 - ZIP batch ingestion
 - Column profiling: type, nulls, null %, unique values
@@ -60,7 +61,7 @@ The tool is deliberately separate from the Network Map, Vaccine Prescription Gen
 
 Registered URL sources now keep refresh state in Neon, including the last content hash, ETag/Last-Modified metadata when available, last check, last change, status, and error. A changed source is transformed with its saved recipe and replaces its target table only after the existing table is snapshotted.
 
-The raw-file archive layer can later be connected to Uploadcare, S3, or R2 without changing the transform or database layers.
+If a registered source has **Archive raw** enabled and `UPLOADCARE_PUBLIC_KEY` is configured, each changed raw file is uploaded to Uploadcare before transformation. The Uploadcare UUID and CDN URL are stored in both source state and import history, preserving source provenance alongside the normalized Neon table.
 
 ## Local run
 
@@ -82,6 +83,7 @@ Create a normal Render Web Service manually from this GitHub repository.
 - Build command: pip install -r requirements.txt
 - Start command: streamlit run app.py --server.address 0.0.0.0 --server.port $PORT
 - Environment variable: DATABASE_URL = your Neon pooled PostgreSQL connection string
+- Optional environment variable: UPLOADCARE_PUBLIC_KEY = Uploadcare public key for raw-source archiving
 
 No database is required just to use the file cleaning and export workbench. Neon enables persistent recipes, registered source URLs, refresh/change tracking, direct table loading, import history, and rollback snapshots.
 
@@ -102,7 +104,7 @@ The cron runner checks every active source, skips unchanged downloads, and refre
 
 The code is modular so the next additions can include:
 
-- raw file archive integration
+- S3/R2 raw archive adapters in addition to Uploadcare
 - additional international geocoding adapters
 - richer international address normalization
 - downloadable validation/error packages
