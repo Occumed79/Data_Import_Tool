@@ -87,6 +87,7 @@ def ensure_metadata_tables(engine=None) -> None:
                 recipe_name TEXT,
                 active BOOLEAN NOT NULL DEFAULT TRUE,
                 archive_raw BOOLEAN NOT NULL DEFAULT FALSE,
+                refresh_interval_minutes INTEGER NOT NULL DEFAULT 1440,
                 last_hash TEXT,
                 last_archive_uuid TEXT,
                 last_archive_url TEXT,
@@ -103,6 +104,7 @@ def ensure_metadata_tables(engine=None) -> None:
         conn.execute(text("""
             ALTER TABLE dit_sources
                 ADD COLUMN IF NOT EXISTS archive_raw BOOLEAN NOT NULL DEFAULT FALSE,
+                ADD COLUMN IF NOT EXISTS refresh_interval_minutes INTEGER NOT NULL DEFAULT 1440,
                 ADD COLUMN IF NOT EXISTS last_archive_uuid TEXT,
                 ADD COLUMN IF NOT EXISTS last_archive_url TEXT
         """))
@@ -213,16 +215,26 @@ def save_source(
     recipe_name: str | None = None,
     active: bool = True,
     archive_raw: bool = False,
+    refresh_interval_minutes: int = 1440,
 ) -> None:
+    if refresh_interval_minutes < 60:
+        raise ValueError("refresh_interval_minutes must be at least 60.")
+
     engine = get_engine()
     ensure_metadata_tables(engine)
     with engine.begin() as conn:
         conn.execute(
             text("""
                 INSERT INTO dit_sources
-                    (name, url, target_table, recipe_name, active, archive_raw)
+                    (
+                        name, url, target_table, recipe_name, active, archive_raw,
+                        refresh_interval_minutes
+                    )
                 VALUES
-                    (:name, :url, :target_table, :recipe_name, :active, :archive_raw)
+                    (
+                        :name, :url, :target_table, :recipe_name, :active, :archive_raw,
+                        :refresh_interval_minutes
+                    )
                 ON CONFLICT (name)
                 DO UPDATE SET
                     url = EXCLUDED.url,
@@ -230,6 +242,7 @@ def save_source(
                     recipe_name = EXCLUDED.recipe_name,
                     active = EXCLUDED.active,
                     archive_raw = EXCLUDED.archive_raw,
+                    refresh_interval_minutes = EXCLUDED.refresh_interval_minutes,
                     updated_at = NOW()
             """),
             {
@@ -239,6 +252,7 @@ def save_source(
                 "recipe_name": recipe_name or None,
                 "active": bool(active),
                 "archive_raw": bool(archive_raw),
+                "refresh_interval_minutes": int(refresh_interval_minutes),
             },
         )
 
@@ -249,6 +263,7 @@ def list_sources(active_only: bool = False) -> list[dict[str, Any]]:
     query = """
         SELECT
             id, name, url, target_table, recipe_name, active, archive_raw,
+            refresh_interval_minutes,
             last_hash, last_archive_uuid, last_archive_url,
             last_etag, last_modified, last_status, last_error,
             last_checked_at, last_changed_at, created_at, updated_at
@@ -262,6 +277,30 @@ def list_sources(active_only: bool = False) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def list_due_sources() -> list[dict[str, Any]]:
+    engine = get_engine()
+    ensure_metadata_tables(engine)
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT
+                    id, name, url, target_table, recipe_name, active, archive_raw,
+                    refresh_interval_minutes,
+                    last_hash, last_archive_uuid, last_archive_url,
+                    last_etag, last_modified, last_status, last_error,
+                    last_checked_at, last_changed_at, created_at, updated_at
+                FROM dit_sources
+                WHERE active = TRUE
+                  AND (
+                      last_checked_at IS NULL
+                      OR last_checked_at <= NOW() - (refresh_interval_minutes || ' minutes')::interval
+                  )
+                ORDER BY name
+            """)
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
 def get_source(source_id: int) -> dict[str, Any] | None:
     engine = get_engine()
     ensure_metadata_tables(engine)
@@ -270,6 +309,7 @@ def get_source(source_id: int) -> dict[str, Any] | None:
             text("""
                 SELECT
                     id, name, url, target_table, recipe_name, active, archive_raw,
+                    refresh_interval_minutes,
                     last_hash, last_archive_uuid, last_archive_url,
                     last_etag, last_modified, last_status, last_error,
                     last_checked_at, last_changed_at, created_at, updated_at
